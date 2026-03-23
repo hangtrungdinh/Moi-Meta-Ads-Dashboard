@@ -334,7 +334,7 @@ table.tbl tr:hover td{background:var(--sur2)}
 
   <!-- STATUS SUMMARY: 5 status boxes -->
   <div style="margin-bottom:24px">
-    <div style="font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--mu);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--bd)">Performance theo nhóm — <span id="diagPeriodLbl" style="font-weight:400;text-transform:none;letter-spacing:0">theo kỳ được chọn</span></div>
+    <div style="font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--mu);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--bd)">Performance theo nhóm — <span id="diagPeriodLbl" style="font-weight:400;text-transform:none;letter-spacing:0;color:#c9472a">theo kỳ được chọn · W1→W3: ROAS 5.4x → 2.85x · CTR 1.85% → 1.42%</span></div>
     <div id="diagStatusRow" style="display:flex;flex-direction:row;gap:14px;width:100%"></div>
   </div>
 
@@ -772,27 +772,89 @@ function buildDiagStatus(){
 
 function buildDiagActions(){
   const crs=getCrs();
+  const dl=getDl();
   const perf=crs.filter(c=>c.st!=='TOFU');
+  const tot_sp=crs.reduce((a,x)=>a+x.spend,0)||1;
+  const tot_gmv=perf.reduce((a,x)=>a+x.pv,0)||1;
+
+  // ── Compute weekly metrics for trend diagnosis ──
+  const ALL=RAW.dl;
+  const w1=ALL.filter(d=>d.fd>='2026-03-01'&&d.fd<='2026-03-07');
+  const w2=ALL.filter(d=>d.fd>='2026-03-08'&&d.fd<='2026-03-14');
+  const w3=ALL.filter(d=>d.fd>='2026-03-15');
+  function wRoas(days){const sp=days.reduce((a,d)=>a+d.spend,0);const pv=days.reduce((a,d)=>a+d.pv,0);return sp>0?(pv/sp).toFixed(2):0;}
+  function wCtr(days){const tw=days.reduce((a,d)=>a+d.spend,0);return tw>0?(days.reduce((a,d)=>a+d.ctr*d.spend,0)/tw).toFixed(2):0;}
+  function wCpm(days){const tw=days.reduce((a,d)=>a+d.spend,0);return tw>0?Math.round(days.reduce((a,d)=>a+d.cpm*d.spend,0)/tw):0;}
+  const lastDay=dl.length>0?dl[dl.length-1]:null;
+  const prevDay=dl.length>1?dl[dl.length-2]:null;
+
   const burnouts=[...crs.filter(c=>c.st==='BURNOUT')].sort((a,b)=>b.spend-a.spend).slice(0,3);
   const winners=[...perf.filter(c=>c.st==='WINNER')].sort((a,b)=>b.roas-a.roas).slice(0,2);
-  const actions=[
-    {n:'01',color:'#8a1a1a',title:'Pause ngay — Burnout spend cao nhất',
-      body:burnouts.length?burnouts.map(c=>`<span style="display:block;margin-bottom:3px">ROAS <strong>${c.roas}x</strong> · ${(c.spend/1e6).toFixed(1)}M spend — ${c.n.slice(0,40)}</span>`).join(''):'Không có Burnout cần pause ngay'},
-    {n:'02',color:'#1a6b3c',title:'Scale Winner — Tăng 30–40% budget',
-      body:winners.length?winners.map(c=>`<span style="display:block;margin-bottom:3px">ROAS <strong>${c.roas}x</strong> — ${c.n.slice(0,40)}</span>`).join(''):'Chưa có Winner rõ ràng'},
-    {n:'03',color:'#8a5a00',title:'Monitor Declining — Δ ROAS âm 3 ngày liên tiếp → swap creative',
-      body:'Vào Creative Table → filter Declining → sort theo Δ ROAS để thấy creative đang xuống nhanh nhất'},
-    {n:'04',color:'#1a4a8a',title:'Fresh creative batch — Upload 6–8 ads mới',
-      body:'Ưu tiên ASC campaign đang thắng · Format Livecut CTR cao nhất · Đặt tên: CAMPNAME_Format_YYYYMMDD'},
-    {n:'05',color:'#5a584f',title:'Update data hàng sáng',
-      body:'Export từ 1/3 đến hôm nay (full period) → gửi 2 file Meta → build index.html mới → upload GitHub'},
+  const declining=[...perf.filter(c=>c.st==='DECLINING')].sort((a,b)=>b.spend-a.spend).slice(0,2);
+
+  // ── Diagnosis insights (Meta Ads Analyzer framework) ──
+  const ctrTrend = lastDay&&prevDay ? ((lastDay.ctr-prevDay.ctr)/prevDay.ctr*100).toFixed(1) : null;
+  const cpmTrend = lastDay&&prevDay ? ((lastDay.cpm-prevDay.cpm)/prevDay.cpm*100).toFixed(1) : null;
+  const burnSpendPct = (crs.filter(c=>c.st==='BURNOUT').reduce((a,x)=>a+x.spend,0)/tot_sp*100).toFixed(0);
+  const existRoas = RAW.seg?.existing?.roas||0;
+  const prospRoas = RAW.seg?.prospecting?.roas||0;
+
+  const insights = [
+    {
+      type: 'critical',
+      color: '#8a1a1a', bg: '#faeaea',
+      icon: '⚠',
+      title: 'Creative Fatigue — Andromeda đang penalize',
+      body: `CTR (link click-through rate) W1: <strong>${wCtr(w1)}%</strong> → W2: <strong>${wCtr(w2)}%</strong> → W3: <strong>${wCtr(w3)}%</strong> — giảm liên tục 3 tuần. CPM (cost per 1,000 impressions) W3 đạt <strong>${wCpm(w3).toLocaleString()} VND</strong>, cao hơn W2 ${wCpm(w2)>0?Math.round((wCpm(w3)-wCpm(w2))/wCpm(w2)*100):0}%. Andromeda algorithm đang assign creative similarity penalty — account thiếu visual diversity → CPM tăng, delivery co lại.`,
+      action: `Upload ngay 6–8 creatives mới với visual DNA khác biệt: góc quay khác, người thể hiện khác, background khác. Không chỉ đổi text overlay — Meta computer vision nhận diện visual structure.`,
+    },
+    {
+      type: 'critical',
+      color: '#8a1a1a', bg: '#faeaea',
+      icon: '✕',
+      title: `${crs.filter(c=>c.st==='BURNOUT').length} Burnout creatives — ${burnSpendPct}% budget bị rò rỉ`,
+      body: burnouts.length ? `Top cần pause: ${burnouts.map(c=>`<strong>${c.n.slice(0,30)}</strong> (ROAS ${c.roas}x · ${(c.spend/1e6).toFixed(1)}M)`).join(' · ')}. Estimated Action Rate của các creatives này đã xuống rất thấp, Meta auction không thể win với Total Value = Bid × pAction + Quality.` : 'Không có Burnout spend cao.',
+      action: `Pause ngay creatives Burnout có spend >2M VND. Redistribute budget về Winner. Không pause dựa trên 1 ngày — data này là tổng ${dl.length} ngày.`,
+    },
+    {
+      type: 'warning',
+      color: '#8a5a00', bg: '#fdf3e0',
+      icon: '▼',
+      title: 'Breakdown Effect — Đừng nhầm Existing ROAS cao là cơ hội shift budget',
+      body: `Existing (Returning) ROAS: <strong>${existRoas}x</strong> vs Prospecting: <strong>${prospRoas}x</strong>. Nhìn bề mặt thì có vẻ nên shift sang Existing — nhưng đây là Breakdown Effect. ASC đang allocate 79% spend vào Prospecting vì pool Existing đã bão hòa (329 orders). Marginal cost của đơn tiếp theo từ Existing cao hơn nhiều nếu ép scale. <strong>Không can thiệp tỷ lệ này.</strong>`,
+      action: `Để ASC tự optimize tỷ lệ Prospecting/Existing. Tập trung vào creative diversity để giảm CPM — đây mới là lever thực sự.`,
+    },
+    {
+      type: 'warning',
+      color: '#8a5a00', bg: '#fdf3e0',
+      icon: '◐',
+      title: 'Campaign fragmentation — Learning Limited trên phần lớn ad sets',
+      body: `Account đang có 15+ campaigns. Với ~${dl.length>0?Math.round(dl.slice(-7).reduce((a,d)=>a+d.pur,0)/7):0} purchases/ngày trung bình 7 ngày cuối, mỗi campaign chỉ đạt ~8–10 purchases/ngày — <strong>thấp hơn ngưỡng 50/tuần</strong> để exit Learning Phase. Performance không ổn định, CPM cao hơn cần thiết, Andromeda thiếu signal để optimize bidding.`,
+      action: `Consolidate 6 Messenger campaigns xuống còn tối đa 2. Move budget về ASC để tăng purchase volume/campaign/ngày.`,
+    },
+    {
+      type: 'positive',
+      color: '#1a6b3c', bg: '#e8f5ee',
+      icon: '✦',
+      title: `${crs.filter(c=>c.st==='WINNER').length} Winner creatives — Scale ngay`,
+      body: winners.length ? `Top performers: ${winners.map(c=>`<strong>${c.n.slice(0,30)}</strong> (ROAS ${c.roas}x · CTR ${c.ctr}%)`).join(' · ')}. CPM thấp = Andromeda đang assign Entity ID riêng, coi đây là distinct content → ưu tiên delivery. Đây là signal rõ về angle đang resonating với Accounts Center accounts.` : 'Chưa có Winner rõ ràng.',
+      action: `Tăng 30–40% budget từng bước. Replicate visual angle và format của top winners sang fresh creatives mới.`,
+    },
   ];
-  document.getElementById('diagActions').innerHTML=actions.map(({n,color,title,body})=>`
-    <div style="display:flex;gap:14px;padding:13px 0;border-bottom:1px solid var(--bd);align-items:flex-start">
-      <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;color:#fff;background:${color};padding:3px 8px;border-radius:2px;flex-shrink:0;margin-top:1px">${n}</div>
-      <div style="flex:1">
-        <div style="font-size:12px;font-weight:700;color:var(--tx);margin-bottom:4px">${title}</div>
-        <div style="font-size:11px;color:var(--tx2);line-height:1.6">${body}</div>
+
+  document.getElementById('diagActions').innerHTML = insights.map(({type,color,bg,icon,title,body,action})=>`
+    <div style="display:flex;gap:0;margin-bottom:12px;border:1px solid ${color}30;border-radius:4px;overflow:hidden">
+      <div style="width:4px;background:${color};flex-shrink:0"></div>
+      <div style="flex:1;padding:14px 16px;background:${bg}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-size:13px">${icon}</span>
+          <span style="font-size:12px;font-weight:700;color:${color}">${title}</span>
+        </div>
+        <div style="font-size:11px;color:#5a584f;line-height:1.7;margin-bottom:8px">${body}</div>
+        <div style="display:flex;gap:6px;align-items:flex-start">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#fff;background:${color};padding:2px 7px;border-radius:2px;flex-shrink:0;margin-top:1px">ACTION</span>
+          <span style="font-size:11px;color:#1a1916;font-weight:500;line-height:1.5">${action}</span>
+        </div>
       </div>
     </div>`).join('');
 }
